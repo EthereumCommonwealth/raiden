@@ -2,7 +2,6 @@
 import gevent
 import pytest
 
-from raiden.mtree import check_proof
 from raiden.messages import RevealSecret
 from raiden.tests.utils.events import must_contain_entry
 from raiden.tests.utils.blockchain import wait_until_block
@@ -23,6 +22,7 @@ from raiden.transfer.mediated_transfer.state_change import (
     ContractReceiveSettled,
     ReceiveSecretReveal,
 )
+from raiden.transfer.merkle_tree import validate_proof, merkleroot
 from raiden.transfer.state import CHANNEL_STATE_OPENED
 from raiden.transfer.state_change import Block
 from raiden.utils import sha3, privatekey_to_address
@@ -102,16 +102,13 @@ def test_settlement(raiden_network, settle_timeout, reveal_timeout):
     # call settle.
 
     # get proof, that locked transfermessage was in merkle tree, with locked.root
-    lock = bob_alice_channel.partner_state.balance_proof.get_lock_by_hashlock(hashlock)
+    lock = bob_alice_channel.partner_state.get_lock_by_hashlock(hashlock)
     assert sha3(secret) == hashlock
-    unlock_proof = bob_alice_channel.partner_state.balance_proof.compute_proof_for_lock(
-        secret,
-        lock,
-    )
+    unlock_proof = bob_alice_channel.partner_state.compute_proof_for_lock(secret, lock)
 
-    root = bob_alice_channel.partner_state.balance_proof.merkleroot_for_unclaimed()
+    root = merkleroot(bob_alice_channel.partner_state.merkletree)
 
-    assert check_proof(
+    assert validate_proof(
         unlock_proof.merkle_proof,
         root,
         sha3(transfermessage.lock.as_bytes),
@@ -228,8 +225,8 @@ def test_settled_lock(token_addresses, raiden_network, settle_timeout, reveal_ti
 
     # Get the proof to unlock the pending lock
     secret_transfer = get_received_transfer(back_channel, 0)
-    lock = back_channel.partner_state.balance_proof.get_lock_by_hashlock(hashlock)
-    unlock_proof = back_channel.partner_state.balance_proof.compute_proof_for_lock(secret, lock)
+    lock = back_channel.partner_state.get_lock_by_hashlock(hashlock)
+    unlock_proof = back_channel.partner_state.compute_proof_for_lock(secret, lock)
 
     # Update the hashlock
     claim_lock(raiden_network, identifier, token, secret)
@@ -237,7 +234,7 @@ def test_settled_lock(token_addresses, raiden_network, settle_timeout, reveal_ti
 
     # The direct transfer locksroot must remove the unlocked lock and update
     # the transferred amount, the withdraw must fail.
-    balance_proof = back_channel.partner_state.balance_proof.balance_proof
+    balance_proof = back_channel.partner_state.balance_proof
     back_channel.external_state.close(balance_proof)
     with pytest.raises(Exception):
         back_channel.external_state.netting_channel.withdraw(
@@ -338,8 +335,8 @@ def test_start_end_attack(token_addresses, raiden_chain, deposit, reveal_timeout
     hub_contract = channel(app1, app0, token).external_state.netting_channel.address
 
     # the attacker can create a merkle proof of the locked transfer
-    lock = attack_channel.partner_state.balance_proof.get_lock_by_hashlock(hashlock)
-    unlock_proof = attack_channel.partner_state.balance_proof.compute_proof_for_lock(secret, lock)
+    lock = attack_channel.partner_state.get_lock_by_hashlock(hashlock)
+    unlock_proof = attack_channel.partner_state.compute_proof_for_lock(secret, lock)
 
     # start the settle counter
     attack_balance_proof = attack_transfer.to_balanceproof()
@@ -454,7 +451,7 @@ def test_automatic_dispute(raiden_network, deposit, settle_timeout):
 
     # Alice can only provide one of Bob's transfer, so she is incentivized to
     # use the one with the largest transferred_amount.
-    channel0.external_state.close(channel0.partner_state.balance_proof.balance_proof)
+    channel0.external_state.close(channel0.partner_state.balance_proof)
     chain0 = app0.raiden.chain
     wait_until_block(chain0, chain0.block_number() + 1)
 

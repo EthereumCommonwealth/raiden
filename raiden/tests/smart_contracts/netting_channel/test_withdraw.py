@@ -4,16 +4,21 @@ from ethereum.tester import TransactionFailed
 from coincurve import PrivateKey
 
 from raiden.messages import Lock, MediatedTransfer
-from raiden.mtree import Merkletree
 from raiden.tests.utils.messages import (
     HASHLOCK_FOR_MERKLETREE,
     HASHLOCKS_SECRESTS,
     make_direct_transfer,
     make_lock,
 )
-from raiden.transfer.state_change import Block
-from raiden.utils import sha3, privatekey_to_address
 from raiden.tests.utils.transfer import make_mediated_transfer
+from raiden.transfer.merkle_tree import (
+    compute_layers,
+    compute_merkleproof_for,
+    merkleroot,
+)
+from raiden.transfer.state_change import Block
+from raiden.transfer.state import MerkleTreeState
+from raiden.utils import sha3, privatekey_to_address
 
 
 def test_withdraw(
@@ -53,7 +58,7 @@ def test_withdraw(
     )
 
     # withdraw the pending transfer sent to us by our partner
-    proof = channel1.partner_state.balance_proof.compute_proof_for_lock(
+    proof = channel1.partner_state.compute_proof_for_lock(
         secret,
         mediated0.lock,
     )
@@ -208,7 +213,7 @@ def test_withdraw_expired_lock(reveal_timeout, tester_channels, tester_state):
     # expire the lock
     tester_state.mine(number_of_blocks=lock_timeout + 1)
 
-    unlock_proofs = list(channel0.partner_state.balance_proof.get_known_unlocks())
+    unlock_proofs = list(channel0.partner_state.get_known_unlocks())
     proof = unlock_proofs[0]
 
     with pytest.raises(TransactionFailed):
@@ -297,7 +302,7 @@ def test_withdraw_both_participants(
     )
     tester_state.mine(number_of_blocks=1)
 
-    proof01 = channel1.partner_state.balance_proof.compute_proof_for_lock(
+    proof01 = channel1.partner_state.compute_proof_for_lock(
         secret,
         mediated01.lock,
     )
@@ -308,7 +313,7 @@ def test_withdraw_both_participants(
         sender=pkey1,
     )
 
-    proof10 = channel0.partner_state.balance_proof.compute_proof_for_lock(
+    proof10 = channel0.partner_state.compute_proof_for_lock(
         secret,
         mediated10.lock,
     )
@@ -361,7 +366,7 @@ def test_withdraw_twice(reveal_timeout, tester_channels, tester_state):
         sender=pkey0,
     )
 
-    unlock_proofs = list(channel0.partner_state.balance_proof.get_known_unlocks())
+    unlock_proofs = list(channel0.partner_state.get_known_unlocks())
     proof = unlock_proofs[0]
 
     nettingchannel.withdraw(
@@ -400,14 +405,16 @@ def test_withdraw_fails_with_partial_merkle_proof(
         for hashlock in tree
     ]
 
-    merkle_tree = Merkletree(sha3(lock.as_bytes) for lock in locks)
+    leaves = [sha3(lock.as_bytes) for lock in locks]
+    layers = compute_layers(leaves)
+    merkle_tree = MerkleTreeState(layers)
 
     opened_block = nettingchannel.opened(sender=pkey0)
     nonce = 1 + (opened_block * (2 ** 32))
     direct_transfer = make_direct_transfer(
         nonce=nonce,
         channel=channel0.channel_address,
-        locksroot=merkle_tree.merkleroot,
+        locksroot=merkleroot(merkle_tree),
         recipient=privatekey_to_address(pkey1)
     )
 
@@ -428,7 +435,7 @@ def test_withdraw_fails_with_partial_merkle_proof(
     for lock in locks:
         secret = HASHLOCKS_SECRESTS[lock.hashlock]
         lock_encoded = lock.as_bytes
-        merkle_proof = merkle_tree.make_proof(sha3(lock_encoded))
+        merkle_proof = compute_merkleproof_for(merkle_tree, sha3(lock_encoded))
 
         # withdraw must fail regardless of which part of the proof is removed
         for hash_ in merkle_proof:
@@ -459,14 +466,16 @@ def test_withdraw_tampered_merkle_proof(tree, tester_channels, tester_state, set
         for hashlock in tree
     ]
 
-    merkle_tree = Merkletree(sha3(lock.as_bytes) for lock in locks)
+    leaves = [sha3(lock.as_bytes) for lock in locks]
+    layers = compute_layers(leaves)
+    merkle_tree = MerkleTreeState(layers)
 
     opened_block = nettingchannel.opened(sender=pkey0)
     nonce = 1 + (opened_block * (2 ** 32))
     direct_transfer = make_direct_transfer(
         nonce=nonce,
         channel=channel0.channel_address,
-        locksroot=merkle_tree.merkleroot,
+        locksroot=merkleroot(merkle_tree),
         recipient=privatekey_to_address(pkey1)
     )
 
@@ -488,7 +497,7 @@ def test_withdraw_tampered_merkle_proof(tree, tester_channels, tester_state, set
         secret = HASHLOCKS_SECRESTS[lock.hashlock]
 
         lock_encoded = lock.as_bytes
-        merkle_proof = merkle_tree.make_proof(sha3(lock_encoded))
+        merkle_proof = compute_merkleproof_for(merkle_tree, sha3(lock_encoded))
 
         # withdraw must fail regardless of which part of the proof is tampered
         for pos, hash_ in enumerate(merkle_proof):
@@ -529,14 +538,16 @@ def test_withdraw_tampered_lock_amount(
         for hashlock in tree
     ]
 
-    merkle_tree = Merkletree(sha3(lock.as_bytes) for lock in locks)
+    leaves = [sha3(lock.as_bytes) for lock in locks]
+    layers = compute_layers(leaves)
+    merkle_tree = MerkleTreeState(layers)
 
     opened_block = nettingchannel.opened(sender=pkey0)
     nonce = 1 + (opened_block * (2 ** 32))
     direct_transfer = make_direct_transfer(
         nonce=nonce,
         channel=channel0.channel_address,
-        locksroot=merkle_tree.merkleroot,
+        locksroot=merkleroot(merkle_tree),
         token=tester_token.address,
         recipient=privatekey_to_address(pkey1)
     )
@@ -559,7 +570,7 @@ def test_withdraw_tampered_lock_amount(
         secret = HASHLOCKS_SECRESTS[lock.hashlock]
 
         lock_encoded = lock.as_bytes
-        merkle_proof = merkle_tree.make_proof(sha3(lock_encoded))
+        merkle_proof = compute_merkleproof_for(merkle_tree, sha3(lock_encoded))
 
         tampered_lock = make_lock(
             amount=lock.amount * 100,
@@ -630,7 +641,7 @@ def test_withdraw_lock_with_a_large_expiration(
         sender=pkey1,
     )
 
-    unlock_proofs = list(channel1.partner_state.balance_proof.get_known_unlocks())
+    unlock_proofs = list(channel1.partner_state.get_known_unlocks())
     proof = unlock_proofs[0]
 
     nettingchannel.withdraw(
