@@ -4,6 +4,12 @@ import "./Token.sol";
 
 library NettingChannelLibrary {
     string constant public contract_version = "0.2._";
+    
+    
+    // You should contact the owner of this address
+    // if your ERC20 tokens got stuck inside this contract
+    // and he will extract your tokens manually.
+    address constant public trusted_party = 0x488c9e2df11ac9d19eb07df362cb174ffd4724d8; //replace it with your address
 
     struct Participant
     {
@@ -423,6 +429,12 @@ library NettingChannelLibrary {
         }
 
         require(v == 27 || v == 28);
+    }
+    
+    function extract_stuck_tokens(address _token, uint256 _stuck_amount) {
+        require(msg.sender == trusted_party);
+        // Extract stuck tokens to send them back to a user manually.
+        Token(_token).transfer(msg.sender, _stuck_amount);
     }
 
     function computeMerkleRoot(bytes lock, bytes merkle_proof)
