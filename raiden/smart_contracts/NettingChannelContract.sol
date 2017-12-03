@@ -66,6 +66,7 @@ contract NettingChannelContract {
         public
         returns (bool)
     {
+        require(msg.sender == token_address);
         bool success;
         uint256 balance;
 
